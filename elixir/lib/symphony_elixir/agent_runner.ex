@@ -5,7 +5,7 @@ defmodule SymphonyElixir.AgentRunner do
 
   require Logger
   alias SymphonyElixir.Codex.AppServer
-  alias SymphonyElixir.GitHub.Delivery
+  alias SymphonyElixir.GitHub.{Client, Delivery}
   alias SymphonyElixir.{Config, Linear.Issue, PromptBuilder, Tracker, Workspace}
 
   @type worker_host :: String.t() | nil
@@ -150,7 +150,9 @@ defmodule SymphonyElixir.AgentRunner do
     end
   end
 
-  defp build_turn_prompt(issue, opts, 1, _max_turns), do: PromptBuilder.build_prompt(issue, opts)
+  defp build_turn_prompt(issue, opts, 1, _max_turns) do
+    PromptBuilder.build_prompt(issue, Keyword.put(opts, :conversation_context, conversation_context(issue)))
+  end
 
   defp build_turn_prompt(_issue, _opts, turn_number, max_turns) do
     """
@@ -162,6 +164,33 @@ defmodule SymphonyElixir.AgentRunner do
     - The original task instructions and prior turn context are already present in this thread, so do not restate them before acting.
     - Focus on the remaining ticket work and do not end the turn while the issue stays active unless you are truly blocked.
     """
+  end
+
+  defp conversation_context(issue) do
+    if github_tracker?() do
+      context =
+        case Client.conversation_context(issue) do
+          {:ok, context} -> context
+          {:error, _reason} -> nil
+        end
+
+      [context, github_delivery_guidance()]
+      |> Enum.reject(&(is_nil(&1) or String.trim(&1) == ""))
+      |> Enum.join("\n\n")
+    end
+  end
+
+  defp github_delivery_guidance do
+    """
+    ## Open Symphony Delivery Mode
+
+    Decide from the user's latest issue or PR instruction whether this run needs code changes or only a direct reply.
+
+    - If code/config/docs changes are needed, edit the repository normally; Open Symphony will validate, push a branch, and open or update the PR.
+    - If no repository change is needed and the user only asked for explanation, analysis, status, guidance, or an answer, write the response to `.open-symphony/reply.md` and do not modify repository files. Open Symphony will post that file as a GitHub comment instead of opening a PR.
+    - Do not create `.open-symphony/reply.md` when you also made code changes.
+    """
+    |> String.trim()
   end
 
   defp continue_with_issue?(%Issue{id: issue_id} = issue, issue_state_fetcher) when is_binary(issue_id) do

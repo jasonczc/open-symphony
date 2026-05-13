@@ -2088,6 +2088,15 @@ If `tracker.kind == "github"` is implemented, tests SHOULD cover:
   and internal runtime metadata minimization.
 - `pr_open` re-dispatch semantics: pause when the issue has not changed since delivery and re-enter
   the active queue when the issue is updated after delivery.
+- Optional GitHub feedback surfaces: PR sticky delivery comment creation/update without duplicates,
+  `open-symphony/validation` commit status payloads, trigger comment reaction acknowledgement, and
+  equivalent trigger normalization for `@open-symphony` and `@os`.
+- GitHub conversation context packing: bounded recent issue/PR comment history, current workpad state,
+  machine-marker stripping, and token-like secret redaction before prompt injection.
+- PR comment trigger bridge: when enabled, `@open-symphony`/`@os` comments on managed PRs requeue
+  the linked issue and are marked handled in the workpad during claim.
+- Direct reply delivery: when an agent writes `.open-symphony/reply.md` without repository changes,
+  Symphony posts it as a GitHub comment and records `reply_posted` instead of opening a PR.
 
 These tests are Extension Conformance. They should not require real GitHub credentials by default;
 mocked GitHub API boundaries and isolated local git repositories are preferred for deterministic CI.

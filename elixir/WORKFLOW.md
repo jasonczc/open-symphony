@@ -43,6 +43,16 @@ pr:
     - open-symphony
 validation:
   commands: []
+github:
+  feedback:
+    pr_sticky_comment: false
+    trigger_reactions: false
+    pr_comment_triggers: false
+    commit_status: false
+    triggers:
+      primary: "@open-symphony"
+      aliases:
+        - "@os"
 ---
 
 You are working on a Linear ticket `{{ issue.identifier }}`

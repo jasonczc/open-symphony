@@ -786,6 +786,24 @@ defmodule SymphonyElixir.CoreTest do
     assert prompt =~ "attempt=3"
   end
 
+  test "prompt builder appends conversation context when provided" do
+    write_workflow_file!(Workflow.workflow_file_path(), prompt: "Ticket {{ issue.identifier }}")
+
+    issue = %Issue{
+      identifier: "GH-5",
+      title: "Follow up",
+      description: "Need history",
+      state: "open",
+      labels: []
+    }
+
+    prompt = PromptBuilder.build_prompt(issue, conversation_context: "## Conversation Context\nPrior discussion")
+
+    assert prompt =~ "Ticket GH-5"
+    assert prompt =~ "## Conversation Context"
+    assert prompt =~ "Prior discussion"
+  end
+
   test "prompt builder renders issue datetime fields without crashing" do
     workflow_prompt = "Ticket {{ issue.identifier }} created={{ issue.created_at }} updated={{ issue.updated_at }}"
 

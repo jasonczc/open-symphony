@@ -150,6 +150,7 @@ defmodule SymphonyElixir.TestSupport do
           pr_draft: true,
           pr_labels: [],
           validation_commands: [],
+          github_feedback: nil,
           observability_enabled: true,
           observability_refresh_ms: 1_000,
           observability_render_interval_ms: 16,
@@ -196,6 +197,7 @@ defmodule SymphonyElixir.TestSupport do
     pr_draft = Keyword.get(config, :pr_draft)
     pr_labels = Keyword.get(config, :pr_labels)
     validation_commands = Keyword.get(config, :validation_commands)
+    github_feedback = Keyword.get(config, :github_feedback)
     observability_enabled = Keyword.get(config, :observability_enabled)
     observability_refresh_ms = Keyword.get(config, :observability_refresh_ms)
     observability_render_interval_ms = Keyword.get(config, :observability_render_interval_ms)
@@ -245,6 +247,7 @@ defmodule SymphonyElixir.TestSupport do
         "  labels: #{yaml_value(pr_labels)}",
         "validation:",
         "  commands: #{yaml_value(validation_commands)}",
+        github_yaml(github_feedback),
         observability_yaml(observability_enabled, observability_refresh_ms, observability_render_interval_ms),
         server_yaml(server_port, server_host),
         "---",
@@ -304,6 +307,16 @@ defmodule SymphonyElixir.TestSupport do
         "  max_concurrent_agents_per_host: #{yaml_value(max_concurrent_agents_per_host)}"
     ]
     |> Enum.reject(&(&1 in [nil, false]))
+    |> Enum.join("\n")
+  end
+
+  defp github_yaml(nil), do: nil
+
+  defp github_yaml(feedback) when is_map(feedback) do
+    [
+      "github:",
+      "  feedback: #{yaml_value(feedback)}"
+    ]
     |> Enum.join("\n")
   end
 

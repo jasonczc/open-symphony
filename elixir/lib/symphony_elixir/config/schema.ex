@@ -290,6 +290,66 @@ defmodule SymphonyElixir.Config.Schema do
     end
   end
 
+  defmodule GitHub do
+    @moduledoc false
+    use Ecto.Schema
+    import Ecto.Changeset
+
+    @primary_key false
+
+    defmodule Feedback do
+      @moduledoc false
+      use Ecto.Schema
+      import Ecto.Changeset
+
+      @primary_key false
+
+      defmodule Triggers do
+        @moduledoc false
+        use Ecto.Schema
+        import Ecto.Changeset
+
+        @primary_key false
+        embedded_schema do
+          field(:primary, :string, default: "@open-symphony")
+          field(:aliases, {:array, :string}, default: ["@os"])
+        end
+
+        @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
+        def changeset(schema, attrs) do
+          schema
+          |> cast(attrs, [:primary, :aliases], empty_values: [])
+        end
+      end
+
+      embedded_schema do
+        field(:pr_sticky_comment, :boolean, default: false)
+        field(:trigger_reactions, :boolean, default: false)
+        field(:pr_comment_triggers, :boolean, default: false)
+        field(:commit_status, :boolean, default: false)
+        embeds_one(:triggers, Triggers, on_replace: :update, defaults_to_struct: true)
+      end
+
+      @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
+      def changeset(schema, attrs) do
+        schema
+        |> cast(attrs, [:pr_sticky_comment, :trigger_reactions, :pr_comment_triggers, :commit_status], empty_values: [])
+        |> cast_embed(:triggers, with: &Triggers.changeset/2)
+      end
+    end
+
+    embedded_schema do
+      embeds_one(:feedback, Feedback, on_replace: :update, defaults_to_struct: true)
+    end
+
+    @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
+    def changeset(schema, attrs) do
+      schema
+      |> cast(attrs, [], empty_values: [])
+      |> cast_embed(:feedback, with: &Feedback.changeset/2)
+    end
+  end
+
   defmodule Observability do
     @moduledoc false
     use Ecto.Schema
@@ -341,6 +401,7 @@ defmodule SymphonyElixir.Config.Schema do
     embeds_one(:git, Git, on_replace: :update, defaults_to_struct: true)
     embeds_one(:pr, PullRequest, on_replace: :update, defaults_to_struct: true)
     embeds_one(:validation, Validation, on_replace: :update, defaults_to_struct: true)
+    embeds_one(:github, GitHub, on_replace: :update, defaults_to_struct: true)
     embeds_one(:observability, Observability, on_replace: :update, defaults_to_struct: true)
     embeds_one(:server, Server, on_replace: :update, defaults_to_struct: true)
   end
@@ -436,6 +497,7 @@ defmodule SymphonyElixir.Config.Schema do
     |> cast_embed(:git, with: &Git.changeset/2)
     |> cast_embed(:pr, with: &PullRequest.changeset/2)
     |> cast_embed(:validation, with: &Validation.changeset/2)
+    |> cast_embed(:github, with: &GitHub.changeset/2)
     |> cast_embed(:observability, with: &Observability.changeset/2)
     |> cast_embed(:server, with: &Server.changeset/2)
   end

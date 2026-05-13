@@ -14,15 +14,18 @@ defmodule SymphonyElixir.PromptBuilder do
       |> prompt_template!()
       |> parse_template!()
 
-    template
-    |> Solid.render!(
-      %{
-        "attempt" => Keyword.get(opts, :attempt),
-        "issue" => issue |> Map.from_struct() |> to_solid_map()
-      },
-      @render_opts
-    )
-    |> IO.iodata_to_binary()
+    rendered =
+      template
+      |> Solid.render!(
+        %{
+          "attempt" => Keyword.get(opts, :attempt),
+          "issue" => issue |> Map.from_struct() |> to_solid_map()
+        },
+        @render_opts
+      )
+      |> IO.iodata_to_binary()
+
+    append_conversation_context(rendered, Keyword.get(opts, :conversation_context))
   end
 
   defp prompt_template!({:ok, %{prompt_template: prompt}}), do: default_prompt(prompt)
@@ -30,6 +33,16 @@ defmodule SymphonyElixir.PromptBuilder do
   defp prompt_template!({:error, reason}) do
     raise RuntimeError, "workflow_unavailable: #{inspect(reason)}"
   end
+
+  defp append_conversation_context(prompt, context) when is_binary(context) do
+    if String.trim(context) == "" do
+      prompt
+    else
+      prompt <> "\n\n" <> String.trim(context)
+    end
+  end
+
+  defp append_conversation_context(prompt, _context), do: prompt
 
   defp parse_template!(prompt) when is_binary(prompt) do
     Solid.parse!(prompt)

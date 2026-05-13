@@ -134,6 +134,15 @@ pr:
 validation:
   commands:
     - mix test
+github:
+  feedback:
+    pr_sticky_comment: true
+    trigger_reactions: true
+    pr_comment_triggers: true
+    commit_status: true
+    triggers:
+      primary: "@open-symphony"
+      aliases: ["@os"]
 codex:
   command: codex app-server
 ---
@@ -170,6 +179,20 @@ Notes:
 - For `tracker.kind: github`, Symphony polls open GitHub issues, maintains a single
   `## Open Symphony Workpad` comment per issue, creates an issue branch, runs validation commands,
   pushes to `origin`, and creates or reuses a draft pull request.
+- `github.feedback.pr_sticky_comment` creates or updates one `## Open Symphony Delivery` PR
+  conversation comment instead of posting duplicate progress comments.
+- `github.feedback.commit_status` writes an `open-symphony/validation` status to the PR head commit
+  after delivery; status API permission is required, and status write failures do not block delivery.
+- `github.feedback.trigger_reactions` enables `eyes` acknowledgements for accepted trigger comments.
+  The default trigger is `@open-symphony`; the short alias is `@os`.
+- `github.feedback.pr_comment_triggers` lets PR comments such as `@os address this` requeue the
+  linked issue by parsing the Open Symphony branch and workpad PR URL.
+- GitHub runs append a bounded conversation context pack to the first agent prompt, including recent
+  issue comments, workpad state, and linked PR comments when available. Machine-readable workpad
+  markers are stripped and token-like secrets are redacted.
+- Agents can choose direct-reply mode from the user's instruction by writing `.open-symphony/reply.md`
+  without changing repository files. Symphony posts that file as an issue or PR comment and marks the
+  workpad `reply_posted` instead of opening a PR.
 - For path values, `~` is expanded to the home directory.
 - For env-backed path values, use `$VAR`. `workspace.root` resolves `$VAR` before path handling,
   while `codex.command` stays a shell command string and any `$VAR` expansion there happens in the
@@ -240,6 +263,16 @@ over real SSH, then runs the same orchestration flow against those worker addres
 the transport representative without depending on long-lived external machines.
 
 Set `SYMPHONY_LIVE_SSH_WORKER_HOSTS` if you want `make e2e` to target real SSH hosts instead.
+
+GitHub feedback surfaces also have an opt-in live profile. It is skipped by default and requires a disposable repository label:
+
+```bash
+OPEN_SYMPHONY_LIVE_GITHUB=1 \
+OPEN_SYMPHONY_LIVE_REPO=your-org/your-repo \
+OPEN_SYMPHONY_LIVE_LABEL=open-symphony \
+GITHUB_TOKEN=$(gh auth token) \
+mise exec -- mix test test/symphony_elixir/github_live_test.exs
+```
 
 The live test creates a temporary Linear project and issue, writes a temporary `WORKFLOW.md`, runs
 a real agent turn, verifies the workspace side effect, requires Codex to comment on and close the

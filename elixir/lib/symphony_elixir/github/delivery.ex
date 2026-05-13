@@ -8,6 +8,7 @@ defmodule SymphonyElixir.GitHub.Delivery do
 
   @type delivery_result :: :delivered | :continue | {:error, term()}
   @command_timeout_ms 300_000
+  @reply_artifact Path.join([".open-symphony", "reply.md"])
 
   @spec prepare_workspace(Path.t(), Issue.t()) :: {:ok, String.t()} | {:error, term()}
   def prepare_workspace(workspace, %Issue{} = issue) when is_binary(workspace) do
@@ -27,15 +28,22 @@ defmodule SymphonyElixir.GitHub.Delivery do
     metadata = metadata(run_id)
 
     with :ok <- ensure_git_repo(workspace),
+         :continue <- maybe_deliver_reply(workspace, issue, metadata),
          true <- has_deliverable_changes?(workspace),
          {:ok, validation} <- run_validation(workspace),
          :ok <- ensure_validation_passed(validation),
          :ok <- ensure_dirty_changes_committed(workspace, issue),
+         {:ok, head_sha} <- head_sha(workspace),
          :ok <- push_branch(workspace, branch),
          {:ok, pr} <- ensure_pull_request(issue, branch, validation),
+         :ok <- maybe_create_validation_status(head_sha, pr, validation),
+         :ok <- maybe_upsert_delivery_comment(issue, branch, pr, validation, head_sha),
          :ok <- update_delivered_workpad(issue, branch, pr, validation, metadata) do
       :delivered
     else
+      :reply_posted ->
+        :delivered
+
       false ->
         Tracker.update_workpad(issue, Map.merge(metadata, %{status: "coding", event: "No local commits or changes are ready for delivery."}))
         :continue
@@ -55,6 +63,26 @@ defmodule SymphonyElixir.GitHub.Delivery do
       {:error, reason} ->
         Tracker.update_workpad(issue, Map.merge(metadata, %{status: "delivery_failed", event: "Delivery failed: #{sanitize_reason(reason)}"}))
         {:error, reason}
+    end
+  end
+
+  defp maybe_deliver_reply(workspace, issue, metadata) do
+    reply_path = Path.join(workspace, @reply_artifact)
+
+    if File.regular?(reply_path) do
+      reply = reply_path |> File.read!() |> String.trim()
+      File.rm(reply_path)
+
+      if reply != "" and not has_deliverable_changes?(workspace) do
+        with :ok <- Client.create_reply_comment(issue, reply),
+             :ok <- update_reply_workpad(issue, metadata) do
+          :reply_posted
+        end
+      else
+        :continue
+      end
+    else
+      :continue
     end
   end
 
@@ -150,6 +178,13 @@ defmodule SymphonyElixir.GitHub.Delivery do
     git_command(workspace, ["push", "-u", "origin", branch], :git_push_failed)
   end
 
+  defp head_sha(workspace) do
+    case run_git(workspace, ["rev-parse", "HEAD"]) do
+      {:ok, sha} -> {:ok, String.trim(sha)}
+      {:error, output, status} -> {:error, {:git_rev_parse_failed, status, output}}
+    end
+  end
+
   defp ensure_dirty_changes_committed(workspace, issue) do
     if dirty_worktree?(workspace) do
       with :ok <- refuse_sensitive_untracked_files(workspace),
@@ -203,6 +238,67 @@ defmodule SymphonyElixir.GitHub.Delivery do
 
   defp maybe_label_pr(_), do: :ok
 
+  defp maybe_create_validation_status(head_sha, pr, validation) do
+    if feedback_enabled?(:commit_status) do
+      attrs = %{
+        context: "open-symphony/validation",
+        description: validation_description(validation),
+        target_url: pr["html_url"]
+      }
+
+      case Client.create_commit_status(head_sha, validation_state(validation), attrs) do
+        :ok -> :ok
+        {:error, _reason} -> :ok
+      end
+    else
+      :ok
+    end
+  end
+
+  defp maybe_upsert_delivery_comment(issue, branch, pr, validation, head_sha) do
+    if feedback_enabled?(:pr_sticky_comment) do
+      case pr["number"] do
+        number when is_integer(number) or is_binary(number) ->
+          Client.upsert_pr_delivery_comment(to_string(number), delivery_comment_body(issue, branch, validation, head_sha))
+
+        _ ->
+          :ok
+      end
+    else
+      :ok
+    end
+  end
+
+  defp validation_state(validation) do
+    if Enum.all?(validation, &(Map.get(&1, :exit_code) == 0)), do: "success", else: "failure"
+  end
+
+  defp validation_description(validation) do
+    if validation_state(validation) == "success" do
+      "Open Symphony validation passed"
+    else
+      "Open Symphony validation failed"
+    end
+  end
+
+  defp feedback_enabled?(field) do
+    case Config.settings!() do
+      %{github: %{feedback: feedback}} when is_map(feedback) -> Map.get(feedback, field, false)
+      _ -> false
+    end
+  end
+
+  defp update_reply_workpad(issue, metadata) do
+    Tracker.update_workpad(issue, %{
+      status: "reply_posted",
+      run_id: metadata[:run_id],
+      event: "Open Symphony posted a direct reply.",
+      state: %{
+        replied_at: DateTime.utc_now() |> DateTime.to_iso8601()
+      }
+    })
+  end
+
   defp update_delivered_workpad(issue, branch, pr, validation, metadata) do
     Tracker.update_workpad(issue, %{
       status: "pr_open",
@@ -226,6 +322,10 @@ defmodule SymphonyElixir.GitHub.Delivery do
 
     Open Symphony generated this pull request from #{issue.identifier}: #{issue.title}.
 
+    ## What changed
+
+    - Applied the requested issue changes on an Open Symphony branch.
+
     ## Branch
 
     `#{branch}`
@@ -233,6 +333,37 @@ defmodule SymphonyElixir.GitHub.Delivery do
     ## Validation
 
     #{format_validation(validation)}
+
+    ## Review notes
+
+    - Review the diff and validation results before merging.
+    """
+    |> String.trim()
+  end
+
+  defp delivery_comment_body(issue, branch, validation, head_sha) do
+    short_sha = String.slice(head_sha || "", 0, 7)
+
+    """
+    ## Open Symphony Delivery
+
+    **Status:** ready_for_review
+    **Issue:** #{issue.identifier} — #{issue.title}
+    **Branch:** `#{branch}`
+    **Commit:** `#{short_sha}`
+
+    ### What changed
+
+    - Applied the requested issue changes on an Open Symphony branch.
+
+    ### Validation
+
+    #{format_validation(validation)}
+
+    ### Review notes
+
+    - Review the diff and validation results before merging.
+    - To request changes, comment with `@open-symphony ...` or `@os ...` on this PR.
     """
     |> String.trim()
   end
