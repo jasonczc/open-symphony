@@ -10,6 +10,8 @@ defmodule SymphonyElixir.Tracker do
   @callback fetch_issue_states_by_ids([String.t()]) :: {:ok, [term()]} | {:error, term()}
   @callback create_comment(String.t(), String.t()) :: :ok | {:error, term()}
   @callback update_issue_state(String.t(), String.t()) :: :ok | {:error, term()}
+  @callback claim_issue(term(), map()) :: :ok | {:skip, term()} | {:error, term()}
+  @callback update_workpad(term(), map()) :: :ok | {:error, term()}
 
   @spec fetch_candidate_issues() :: {:ok, [term()]} | {:error, term()}
   def fetch_candidate_issues do
@@ -36,10 +38,21 @@ defmodule SymphonyElixir.Tracker do
     adapter().update_issue_state(issue_id, state_name)
   end
 
+  @spec claim_issue(term(), map()) :: :ok | {:skip, term()} | {:error, term()}
+  def claim_issue(issue, metadata \\ %{}) do
+    adapter().claim_issue(issue, metadata)
+  end
+
+  @spec update_workpad(term(), map()) :: :ok | {:error, term()}
+  def update_workpad(issue, metadata \\ %{}) do
+    adapter().update_workpad(issue, metadata)
+  end
+
   @spec adapter() :: module()
   def adapter do
     case Config.settings!().tracker.kind do
       "memory" -> SymphonyElixir.Tracker.Memory
+      "github" -> SymphonyElixir.GitHub.Adapter
       _ -> SymphonyElixir.Linear.Adapter
     end
   end

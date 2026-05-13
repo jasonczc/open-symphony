@@ -22,9 +22,11 @@ defmodule SymphonyElixir.TestSupport do
       alias SymphonyElixir.Workspace
 
       import SymphonyElixir.TestSupport,
-        only: [write_workflow_file!: 1, write_workflow_file!: 2, restore_env: 2, stop_default_http_server: 0]
+        only: [ensure_application_started: 0, write_workflow_file!: 1, write_workflow_file!: 2, restore_env: 2, stop_default_http_server: 0]
 
       setup do
+        ensure_application_started()
+
         workflow_root =
           Path.join(
             System.tmp_dir!(),
@@ -43,6 +45,9 @@ defmodule SymphonyElixir.TestSupport do
           Application.delete_env(:symphony_elixir, :server_port_override)
           Application.delete_env(:symphony_elixir, :memory_tracker_issues)
           Application.delete_env(:symphony_elixir, :memory_tracker_recipient)
+          Application.delete_env(:symphony_elixir, :github_request_fun)
+          Application.delete_env(:symphony_elixir, :github_viewer_login)
+          Application.delete_env(:symphony_elixir, :github_command_timeout_ms)
           File.rm_rf(workflow_root)
         end)
 
@@ -69,8 +74,25 @@ defmodule SymphonyElixir.TestSupport do
   def restore_env(key, nil), do: System.delete_env(key)
   def restore_env(key, value), do: System.put_env(key, value)
 
+  def ensure_application_started do
+    case Process.whereis(SymphonyElixir.Supervisor) do
+      pid when is_pid(pid) ->
+        :ok
+
+      _ ->
+        {:ok, _apps} = Application.ensure_all_started(:symphony_elixir)
+        :ok
+    end
+  end
+
   def stop_default_http_server do
-    case Enum.find(Supervisor.which_children(SymphonyElixir.Supervisor), fn
+    children =
+      case Process.whereis(SymphonyElixir.Supervisor) do
+        pid when is_pid(pid) -> Supervisor.which_children(SymphonyElixir.Supervisor)
+        _ -> []
+      end
+
+    case Enum.find(children, fn
            {SymphonyElixir.HttpServer, _pid, _type, _modules} -> true
            _child -> false
          end) do
@@ -96,7 +118,11 @@ defmodule SymphonyElixir.TestSupport do
           tracker_endpoint: "https://api.linear.app/graphql",
           tracker_api_token: "token",
           tracker_project_slug: "project",
+          tracker_owner: nil,
+          tracker_repo: nil,
           tracker_assignee: nil,
+          tracker_labels: [],
+          tracker_exclude_labels: [],
           tracker_active_states: ["Todo", "In Progress"],
           tracker_terminal_states: ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"],
           poll_interval_ms: 30_000,
@@ -119,6 +145,11 @@ defmodule SymphonyElixir.TestSupport do
           hook_after_run: nil,
           hook_before_remove: nil,
           hook_timeout_ms: 60_000,
+          git_base_branch: "main",
+          git_branch_prefix: "open-symphony/",
+          pr_draft: true,
+          pr_labels: [],
+          validation_commands: [],
           observability_enabled: true,
           observability_refresh_ms: 1_000,
           observability_render_interval_ms: 16,
@@ -133,7 +164,11 @@ defmodule SymphonyElixir.TestSupport do
     tracker_endpoint = Keyword.get(config, :tracker_endpoint)
     tracker_api_token = Keyword.get(config, :tracker_api_token)
     tracker_project_slug = Keyword.get(config, :tracker_project_slug)
+    tracker_owner = Keyword.get(config, :tracker_owner)
+    tracker_repo = Keyword.get(config, :tracker_repo)
     tracker_assignee = Keyword.get(config, :tracker_assignee)
+    tracker_labels = Keyword.get(config, :tracker_labels)
+    tracker_exclude_labels = Keyword.get(config, :tracker_exclude_labels)
     tracker_active_states = Keyword.get(config, :tracker_active_states)
     tracker_terminal_states = Keyword.get(config, :tracker_terminal_states)
     poll_interval_ms = Keyword.get(config, :poll_interval_ms)
@@ -156,6 +191,11 @@ defmodule SymphonyElixir.TestSupport do
     hook_after_run = Keyword.get(config, :hook_after_run)
     hook_before_remove = Keyword.get(config, :hook_before_remove)
     hook_timeout_ms = Keyword.get(config, :hook_timeout_ms)
+    git_base_branch = Keyword.get(config, :git_base_branch)
+    git_branch_prefix = Keyword.get(config, :git_branch_prefix)
+    pr_draft = Keyword.get(config, :pr_draft)
+    pr_labels = Keyword.get(config, :pr_labels)
+    validation_commands = Keyword.get(config, :validation_commands)
     observability_enabled = Keyword.get(config, :observability_enabled)
     observability_refresh_ms = Keyword.get(config, :observability_refresh_ms)
     observability_render_interval_ms = Keyword.get(config, :observability_render_interval_ms)
@@ -171,7 +211,11 @@ defmodule SymphonyElixir.TestSupport do
         "  endpoint: #{yaml_value(tracker_endpoint)}",
         "  api_key: #{yaml_value(tracker_api_token)}",
         "  project_slug: #{yaml_value(tracker_project_slug)}",
+        "  owner: #{yaml_value(tracker_owner)}",
+        "  repo: #{yaml_value(tracker_repo)}",
         "  assignee: #{yaml_value(tracker_assignee)}",
+        "  labels: #{yaml_value(tracker_labels)}",
+        "  exclude_labels: #{yaml_value(tracker_exclude_labels)}",
         "  active_states: #{yaml_value(tracker_active_states)}",
         "  terminal_states: #{yaml_value(tracker_terminal_states)}",
         "polling:",
@@ -193,6 +237,14 @@ defmodule SymphonyElixir.TestSupport do
         "  read_timeout_ms: #{yaml_value(codex_read_timeout_ms)}",
         "  stall_timeout_ms: #{yaml_value(codex_stall_timeout_ms)}",
         hooks_yaml(hook_after_create, hook_before_run, hook_after_run, hook_before_remove, hook_timeout_ms),
+        "git:",
+        "  base_branch: #{yaml_value(git_base_branch)}",
+        "  branch_prefix: #{yaml_value(git_branch_prefix)}",
+        "pr:",
+        "  draft: #{yaml_value(pr_draft)}",
+        "  labels: #{yaml_value(pr_labels)}",
+        "validation:",
+        "  commands: #{yaml_value(validation_commands)}",
         observability_yaml(observability_enabled, observability_refresh_ms, observability_render_interval_ms),
         server_yaml(server_port, server_host),
         "---",

@@ -107,6 +107,45 @@ You are working on a Linear issue {{ issue.identifier }}.
 Title: {{ issue.title }} Body: {{ issue.description }}
 ```
 
+GitHub Issues example:
+
+```md
+---
+tracker:
+  kind: github
+  owner: your-org
+  repo: your-repo
+  labels: [open-symphony]
+  exclude_labels: [blocked]
+workspace:
+  root: ~/code/open-symphony-workspaces
+hooks:
+  after_create: |
+    git clone git@github.com:your-org/your-repo.git .
+agent:
+  max_concurrent_agents: 3
+  max_turns: 5
+git:
+  base_branch: main
+  branch_prefix: open-symphony/
+pr:
+  draft: true
+  labels: [open-symphony]
+validation:
+  commands:
+    - mix test
+codex:
+  command: codex app-server
+---
+
+You are working on GitHub issue {{ issue.identifier }}.
+
+Title: {{ issue.title }}
+
+Body:
+{{ issue.description }}
+```
+
 Notes:
 
 - If a value is missing, defaults are used.
@@ -127,7 +166,10 @@ Notes:
   `git clone ... .` there, along with any other setup commands you need.
 - If a hook needs `mise exec` inside a freshly cloned workspace, trust the repo config and fetch
   the project dependencies in `hooks.after_create` before invoking `mise` later from other hooks.
-- `tracker.api_key` reads from `LINEAR_API_KEY` when unset or when value is `$LINEAR_API_KEY`.
+- `tracker.api_key` reads from `LINEAR_API_KEY` for Linear and `GITHUB_TOKEN` for GitHub when unset or when value is the corresponding `$VAR`.
+- For `tracker.kind: github`, Symphony polls open GitHub issues, maintains a single
+  `## Open Symphony Workpad` comment per issue, creates an issue branch, runs validation commands,
+  pushes to `origin`, and creates or reuses a draft pull request.
 - For path values, `~` is expanded to the home directory.
 - For env-backed path values, use `$VAR`. `workspace.root` resolves `$VAR` before path handling,
   while `codex.command` stays a shell command string and any `$VAR` expansion there happens in the

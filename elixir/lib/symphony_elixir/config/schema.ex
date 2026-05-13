@@ -49,7 +49,11 @@ defmodule SymphonyElixir.Config.Schema do
       field(:endpoint, :string, default: "https://api.linear.app/graphql")
       field(:api_key, :string)
       field(:project_slug, :string)
+      field(:owner, :string)
+      field(:repo, :string)
       field(:assignee, :string)
+      field(:labels, {:array, :string}, default: [])
+      field(:exclude_labels, {:array, :string}, default: [])
       field(:active_states, {:array, :string}, default: ["Todo", "In Progress"])
       field(:terminal_states, {:array, :string}, default: ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"])
     end
@@ -59,7 +63,19 @@ defmodule SymphonyElixir.Config.Schema do
       schema
       |> cast(
         attrs,
-        [:kind, :endpoint, :api_key, :project_slug, :assignee, :active_states, :terminal_states],
+        [
+          :kind,
+          :endpoint,
+          :api_key,
+          :project_slug,
+          :owner,
+          :repo,
+          :assignee,
+          :labels,
+          :exclude_labels,
+          :active_states,
+          :terminal_states
+        ],
         empty_values: []
       )
     end
@@ -221,6 +237,59 @@ defmodule SymphonyElixir.Config.Schema do
     end
   end
 
+  defmodule Git do
+    @moduledoc false
+    use Ecto.Schema
+    import Ecto.Changeset
+
+    @primary_key false
+    embedded_schema do
+      field(:base_branch, :string, default: "main")
+      field(:branch_prefix, :string, default: "open-symphony/")
+    end
+
+    @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
+    def changeset(schema, attrs) do
+      schema
+      |> cast(attrs, [:base_branch, :branch_prefix], empty_values: [])
+    end
+  end
+
+  defmodule PullRequest do
+    @moduledoc false
+    use Ecto.Schema
+    import Ecto.Changeset
+
+    @primary_key false
+    embedded_schema do
+      field(:draft, :boolean, default: true)
+      field(:labels, {:array, :string}, default: [])
+    end
+
+    @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
+    def changeset(schema, attrs) do
+      schema
+      |> cast(attrs, [:draft, :labels], empty_values: [])
+    end
+  end
+
+  defmodule Validation do
+    @moduledoc false
+    use Ecto.Schema
+    import Ecto.Changeset
+
+    @primary_key false
+    embedded_schema do
+      field(:commands, {:array, :string}, default: [])
+    end
+
+    @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
+    def changeset(schema, attrs) do
+      schema
+      |> cast(attrs, [:commands], empty_values: [])
+    end
+  end
+
   defmodule Observability do
     @moduledoc false
     use Ecto.Schema
@@ -269,6 +338,9 @@ defmodule SymphonyElixir.Config.Schema do
     embeds_one(:agent, Agent, on_replace: :update, defaults_to_struct: true)
     embeds_one(:codex, Codex, on_replace: :update, defaults_to_struct: true)
     embeds_one(:hooks, Hooks, on_replace: :update, defaults_to_struct: true)
+    embeds_one(:git, Git, on_replace: :update, defaults_to_struct: true)
+    embeds_one(:pr, PullRequest, on_replace: :update, defaults_to_struct: true)
+    embeds_one(:validation, Validation, on_replace: :update, defaults_to_struct: true)
     embeds_one(:observability, Observability, on_replace: :update, defaults_to_struct: true)
     embeds_one(:server, Server, on_replace: :update, defaults_to_struct: true)
   end
@@ -361,16 +433,15 @@ defmodule SymphonyElixir.Config.Schema do
     |> cast_embed(:agent, with: &Agent.changeset/2)
     |> cast_embed(:codex, with: &Codex.changeset/2)
     |> cast_embed(:hooks, with: &Hooks.changeset/2)
+    |> cast_embed(:git, with: &Git.changeset/2)
+    |> cast_embed(:pr, with: &PullRequest.changeset/2)
+    |> cast_embed(:validation, with: &Validation.changeset/2)
     |> cast_embed(:observability, with: &Observability.changeset/2)
     |> cast_embed(:server, with: &Server.changeset/2)
   end
 
   defp finalize_settings(settings) do
-    tracker = %{
-      settings.tracker
-      | api_key: resolve_secret_setting(settings.tracker.api_key, System.get_env("LINEAR_API_KEY")),
-        assignee: resolve_secret_setting(settings.tracker.assignee, System.get_env("LINEAR_ASSIGNEE"))
-    }
+    tracker = finalize_tracker(settings.tracker)
 
     workspace = %{
       settings.workspace
@@ -385,6 +456,29 @@ defmodule SymphonyElixir.Config.Schema do
 
     %{settings | tracker: tracker, workspace: workspace, codex: codex}
   end
+
+  defp finalize_tracker(%{kind: "github"} = tracker) do
+    %{
+      tracker
+      | endpoint: github_endpoint(tracker.endpoint),
+        api_key: resolve_secret_setting(tracker.api_key, System.get_env("GITHUB_TOKEN")),
+        assignee: resolve_secret_setting(tracker.assignee, System.get_env("GITHUB_ASSIGNEE")),
+        active_states: ["open"],
+        terminal_states: ["closed"]
+    }
+  end
+
+  defp finalize_tracker(tracker) do
+    %{
+      tracker
+      | api_key: resolve_secret_setting(tracker.api_key, System.get_env("LINEAR_API_KEY")),
+        assignee: resolve_secret_setting(tracker.assignee, System.get_env("LINEAR_ASSIGNEE"))
+    }
+  end
+
+  defp github_endpoint(nil), do: "https://api.github.com"
+  defp github_endpoint("https://api.linear.app/graphql"), do: "https://api.github.com"
+  defp github_endpoint(endpoint), do: endpoint
 
   defp normalize_keys(value) when is_map(value) do
     Enum.reduce(value, %{}, fn {key, raw_value}, normalized ->

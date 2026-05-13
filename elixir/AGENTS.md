@@ -24,6 +24,11 @@ This directory contains the Elixir agent orchestration service that polls Linear
 - Orchestrator behavior is stateful and concurrency-sensitive; preserve retry, reconciliation, and cleanup semantics.
 - Follow `docs/logging.md` for logging conventions and required issue/session context fields.
 
+## Harness Engineering Gates
+
+- Follow [`../docs/ENGINEERING_GATES.md`](../docs/ENGINEERING_GATES.md) for changes that touch orchestration, tracker adapters, shell commands, git operations, external API writes, publishing, claims, or security boundaries.
+- Any implemented optional extension must carry its own Extension Conformance tests. GitHub tracker/delivery changes must satisfy the GitHub Extension Gate in that document.
+
 ## Tests and Validation
 
 Run targeted tests while iterating, then run full gates before handoff.

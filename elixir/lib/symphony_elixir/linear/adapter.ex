@@ -73,6 +73,12 @@ defmodule SymphonyElixir.Linear.Adapter do
     end
   end
 
+  @spec claim_issue(term(), map()) :: :ok
+  def claim_issue(_issue, _metadata), do: :ok
+
+  @spec update_workpad(term(), map()) :: :ok
+  def update_workpad(_issue, _metadata), do: :ok
+
   defp client_module do
     Application.get_env(:symphony_elixir, :linear_client_module, Client)
   end

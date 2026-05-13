@@ -132,16 +132,7 @@ defmodule SymphonyElixir.Orchestrator do
         state =
           case reason do
             :normal ->
-              Logger.info("Agent task completed for issue_id=#{issue_id} session_id=#{session_id}; scheduling active-state continuation check")
-
-              state
-              |> complete_issue(issue_id)
-              |> schedule_issue_retry(issue_id, 1, %{
-                identifier: running_entry.identifier,
-                delay_type: :continuation,
-                worker_host: Map.get(running_entry, :worker_host),
-                workspace_path: Map.get(running_entry, :workspace_path)
-              })
+              handle_normal_worker_exit(state, issue_id, running_entry, session_id)
 
             _ ->
               Logger.warning("Agent task exited for issue_id=#{issue_id} session_id=#{session_id} reason=#{inspect(reason)}; scheduling retry")
@@ -221,6 +212,27 @@ defmodule SymphonyElixir.Orchestrator do
     {:noreply, state}
   end
 
+  defp handle_normal_worker_exit(state, issue_id, running_entry, session_id) do
+    if Config.settings!().tracker.kind == "github" do
+      Logger.info("GitHub agent task completed for issue_id=#{issue_id} session_id=#{session_id}; marking run complete")
+
+      state
+      |> complete_issue(issue_id)
+      |> release_issue_claim(issue_id)
+    else
+      Logger.info("Agent task completed for issue_id=#{issue_id} session_id=#{session_id}; scheduling active-state continuation check")
+
+      state
+      |> complete_issue(issue_id)
+      |> schedule_issue_retry(issue_id, 1, %{
+        identifier: running_entry.identifier,
+        delay_type: :continuation,
+        worker_host: Map.get(running_entry, :worker_host),
+        workspace_path: Map.get(running_entry, :workspace_path)
+      })
+    end
+  end
+
   defp maybe_dispatch(%State{} = state) do
     state = reconcile_running_issues(state)
 
@@ -235,6 +247,18 @@ defmodule SymphonyElixir.Orchestrator do
 
       {:error, :missing_linear_project_slug} ->
         Logger.error("Linear project slug missing in WORKFLOW.md")
+        state
+
+      {:error, :missing_github_api_token} ->
+        Logger.error("GitHub API token missing in WORKFLOW.md")
+        state
+
+      {:error, :missing_github_owner} ->
+        Logger.error("GitHub owner missing in WORKFLOW.md")
+        state
+
+      {:error, :missing_github_repo} ->
+        Logger.error("GitHub repo missing in WORKFLOW.md")
         state
 
       {:error, :missing_tracker_kind} ->
@@ -264,7 +288,7 @@ defmodule SymphonyElixir.Orchestrator do
         state
 
       {:error, reason} ->
-        Logger.error("Failed to fetch from Linear: #{inspect(reason)}")
+        Logger.error("Failed to fetch from tracker: #{inspect(reason)}")
         state
 
       false ->
@@ -691,8 +715,25 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp spawn_issue_on_worker_host(%State{} = state, issue, attempt, recipient, worker_host) do
+    run_id = run_id(issue)
+
+    case Tracker.claim_issue(issue, claim_metadata(run_id, worker_host)) do
+      :ok ->
+        start_claimed_issue(state, issue, attempt, recipient, worker_host, run_id)
+
+      {:skip, reason} ->
+        Logger.info("Skipping claimed issue #{issue_context(issue)} reason=#{inspect(reason)}")
+        state
+
+      {:error, reason} ->
+        Logger.warning("Unable to claim issue #{issue_context(issue)} reason=#{inspect(reason)}")
+        state
+    end
+  end
+
+  defp start_claimed_issue(%State{} = state, issue, attempt, recipient, worker_host, run_id) do
     case Task.Supervisor.start_child(SymphonyElixir.TaskSupervisor, fn ->
-           AgentRunner.run(issue, recipient, attempt: attempt, worker_host: worker_host)
+           AgentRunner.run(issue, recipient, attempt: attempt, worker_host: worker_host, run_id: run_id)
          end) do
       {:ok, pid} ->
         ref = Process.monitor(pid)
@@ -720,6 +761,7 @@ defmodule SymphonyElixir.Orchestrator do
             codex_last_reported_total_tokens: 0,
             turn_count: 0,
             retry_attempt: normalize_retry_attempt(attempt),
+            run_id: run_id,
             started_at: DateTime.utc_now()
           })
 
@@ -741,6 +783,32 @@ defmodule SymphonyElixir.Orchestrator do
         })
     end
   end
+
+  defp claim_metadata(run_id, worker_host) do
+    now = DateTime.utc_now()
+
+    %{
+      run_id: run_id,
+      claimed_at: DateTime.to_iso8601(now),
+      expires_at: claim_expires_at(now),
+      worker: worker_claim_label(worker_host)
+    }
+  end
+
+  defp run_id(issue) do
+    identifier =
+      case issue do
+        %Issue{identifier: identifier} when is_binary(identifier) -> identifier
+        %Issue{id: id} when is_binary(id) -> id
+        _ -> "issue"
+      end
+
+    "#{identifier}-#{System.unique_integer([:positive])}"
+  end
+
+  defp claim_expires_at(now), do: now |> DateTime.add(900, :second) |> DateTime.to_iso8601()
+  defp worker_claim_label(nil), do: "local"
+  defp worker_claim_label(_worker_host), do: "remote"
 
   defp revalidate_issue_for_dispatch(%Issue{id: issue_id}, issue_fetcher, terminal_states)
        when is_binary(issue_id) and is_function(issue_fetcher, 1) do

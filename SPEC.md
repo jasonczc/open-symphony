@@ -349,15 +349,25 @@ Fields:
 
 - `kind` (string)
   - REQUIRED for dispatch.
-  - Current supported value: `linear`
+  - Current supported values: `linear`, `github`
 - `endpoint` (string)
   - Default for `tracker.kind == "linear"`: `https://api.linear.app/graphql`
+  - Default for `tracker.kind == "github"`: `https://api.github.com`
 - `api_key` (string)
   - MAY be a literal token or `$VAR_NAME`.
   - Canonical environment variable for `tracker.kind == "linear"`: `LINEAR_API_KEY`.
+  - Canonical environment variable for `tracker.kind == "github"`: `GITHUB_TOKEN`.
   - If `$VAR_NAME` resolves to an empty string, treat the key as missing.
 - `project_slug` (string)
   - REQUIRED for dispatch when `tracker.kind == "linear"`.
+- `owner` (string)
+  - REQUIRED for dispatch when `tracker.kind == "github"`.
+- `repo` (string)
+  - REQUIRED for dispatch when `tracker.kind == "github"`.
+- `labels` (list of strings)
+  - GitHub-only inclusion filter for open issues.
+- `exclude_labels` (list of strings)
+  - GitHub-only exclusion filter for open issues.
 - `active_states` (list of strings)
   - Default: `Todo`, `In Progress`
 - `terminal_states` (list of strings)
@@ -570,10 +580,12 @@ This section is intentionally redundant so a coding agent can implement the conf
 Extension fields are documented in the extension section that defines them. Core conformance does
 not require recognizing or validating extension fields unless that extension is implemented.
 
-- `tracker.kind`: string, REQUIRED, currently `linear`
+- `tracker.kind`: string, REQUIRED, currently `linear` or `github`
 - `tracker.endpoint`: string, default `https://api.linear.app/graphql` when `tracker.kind=linear`
-- `tracker.api_key`: string or `$VAR`, canonical env `LINEAR_API_KEY` when `tracker.kind=linear`
+- `tracker.api_key`: string or `$VAR`, canonical env `LINEAR_API_KEY` when `tracker.kind=linear`, `GITHUB_TOKEN` when `tracker.kind=github`
 - `tracker.project_slug`: string, REQUIRED when `tracker.kind=linear`
+- `tracker.owner`: string, REQUIRED when `tracker.kind=github`
+- `tracker.repo`: string, REQUIRED when `tracker.kind=github`
 - `tracker.active_states`: list of strings, default `["Todo", "In Progress"]`
 - `tracker.terminal_states`: list of strings, default `["Closed", "Cancelled", "Canceled", "Duplicate", "Done"]`
 - `polling.interval_ms`: integer, default `30000`
@@ -1166,6 +1178,22 @@ Important:
 
 A non-Linear implementation MAY change transport details, but the normalized outputs MUST match the
 domain model in Section 4.
+
+### 11.2.1 Query Semantics (GitHub)
+
+GitHub-specific requirements for `tracker.kind == "github"`:
+
+- REST endpoint default: `https://api.github.com`
+- Auth token sent in `Authorization: Bearer <token>`
+- `tracker.owner` and `tracker.repo` select the repository.
+- Candidate issue query fetches open issues, skips pull request items, applies configured labels,
+  excludes configured `exclude_labels`, and may filter by assignee.
+- GitHub issue numbers are normalized as issue IDs and `GH-<number>` identifiers.
+- Open issues are active; closed issues are terminal.
+- The implementation MAY maintain a single bot-owned `## Open Symphony Workpad` issue comment for
+  claims, run state, validation summaries, and machine-readable PR links.
+- A `pr_open` workpad state pauses re-dispatch only until the GitHub issue is updated after the
+  recorded delivery time, so open issues can still re-enter the active queue for review feedback.
 
 ### 11.3 Normalization Rules
 
@@ -2044,7 +2072,27 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
 - CLI exits with success when application starts and shuts down normally
 - CLI exits nonzero when startup fails or the host process exits abnormally
 
-### 17.8 Real Integration Profile (RECOMMENDED)
+### 17.8 GitHub Extension Conformance
+
+If `tracker.kind == "github"` is implemented, tests SHOULD cover:
+
+- GitHub candidate issue query semantics, including labels, exclude labels, assignee filtering,
+  pull-request item skipping, pagination, and issue normalization.
+- Bot-owned workpad selection, including ignoring spoofed workpad comments from other authors.
+- Claim lifecycle semantics: create/reuse workpad, active foreign claim skip, expired claim reclaim,
+  write-lost claim confirmation, and lease renewal on owned workpad updates.
+- GitHub delivery semantics with a deterministic local git integration test: branch preparation,
+  validation pass/fail, auto-commit, push to an isolated remote, PR creation/reuse, PR labeling,
+  and delivery workpad update.
+- Security regressions for secret/log exposure, suspicious untracked files, public validation output,
+  and internal runtime metadata minimization.
+- `pr_open` re-dispatch semantics: pause when the issue has not changed since delivery and re-enter
+  the active queue when the issue is updated after delivery.
+
+These tests are Extension Conformance. They should not require real GitHub credentials by default;
+mocked GitHub API boundaries and isolated local git repositories are preferred for deterministic CI.
+
+### 17.9 Real Integration Profile (RECOMMENDED)
 
 These checks are RECOMMENDED for production readiness and MAY be skipped in CI when credentials,
 network access, or external service permissions are unavailable.
@@ -2101,7 +2149,9 @@ Use the same validation profiles as Section 17:
 
 ### 18.3 Operational Validation Before Production (RECOMMENDED)
 
-- Run the `Real Integration Profile` from Section 17.8 with valid credentials and network access.
+- Apply the repository-local engineering gates in `docs/ENGINEERING_GATES.md` for harness changes.
+
+- Run the `Real Integration Profile` from Section 17.9 with valid credentials and network access.
 - Verify hook execution and workflow path resolution on the target host OS/shell environment.
 - If the OPTIONAL HTTP server is shipped, verify the configured port behavior and loopback/default
   bind expectations on the target environment.

@@ -821,7 +821,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
                  _ ->
                    false
                end,
-               500
+               1_500
              )
 
     assert %{

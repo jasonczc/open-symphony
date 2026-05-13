@@ -5,6 +5,7 @@ defmodule SymphonyElixir.AgentRunner do
 
   require Logger
   alias SymphonyElixir.Codex.AppServer
+  alias SymphonyElixir.GitHub.Delivery
   alias SymphonyElixir.{Config, Linear.Issue, PromptBuilder, Tracker, Workspace}
 
   @type worker_host :: String.t() | nil
@@ -34,7 +35,9 @@ defmodule SymphonyElixir.AgentRunner do
         send_worker_runtime_info(codex_update_recipient, issue, worker_host, workspace)
 
         try do
-          with :ok <- Workspace.run_before_run_hook(workspace, issue, worker_host) do
+          with {:ok, branch} <- prepare_tracker_workspace(workspace, issue),
+               :ok <- update_tracker_workpad(issue, tracker_metadata(opts, %{status: "coding", event: "Workspace is ready.", state: %{branch: branch}})),
+               :ok <- Workspace.run_before_run_hook(workspace, issue, worker_host) do
             run_codex_turns(workspace, issue, codex_update_recipient, opts, worker_host)
           end
         after
@@ -101,32 +104,49 @@ defmodule SymphonyElixir.AgentRunner do
            ) do
       Logger.info("Completed agent run for #{issue_context(issue)} session_id=#{turn_session[:session_id]} workspace=#{workspace} turn=#{turn_number}/#{max_turns}")
 
-      case continue_with_issue?(issue, issue_state_fetcher) do
-        {:continue, refreshed_issue} when turn_number < max_turns ->
-          Logger.info("Continuing agent run for #{issue_context(refreshed_issue)} after normal turn completion turn=#{turn_number}/#{max_turns}")
-
-          do_run_codex_turns(
-            app_session,
-            workspace,
-            refreshed_issue,
-            codex_update_recipient,
-            opts,
-            issue_state_fetcher,
-            turn_number + 1,
-            max_turns
-          )
-
-        {:continue, refreshed_issue} ->
-          Logger.info("Reached agent.max_turns for #{issue_context(refreshed_issue)} with issue still active; returning control to orchestrator")
-
-          :ok
-
-        {:done, _refreshed_issue} ->
+      case maybe_deliver_github_issue(workspace, issue, opts) do
+        :delivered ->
           :ok
 
         {:error, reason} ->
           {:error, reason}
+
+        :continue ->
+          continue_after_turn(app_session, workspace, issue, codex_update_recipient, opts, issue_state_fetcher, turn_number, max_turns)
       end
+    end
+  end
+
+  defp continue_after_turn(app_session, workspace, issue, codex_update_recipient, opts, issue_state_fetcher, turn_number, max_turns) do
+    case continue_with_issue?(issue, issue_state_fetcher) do
+      {:continue, refreshed_issue} when turn_number < max_turns ->
+        Logger.info("Continuing agent run for #{issue_context(refreshed_issue)} after normal turn completion turn=#{turn_number}/#{max_turns}")
+
+        do_run_codex_turns(
+          app_session,
+          workspace,
+          refreshed_issue,
+          codex_update_recipient,
+          opts,
+          issue_state_fetcher,
+          turn_number + 1,
+          max_turns
+        )
+
+      {:continue, refreshed_issue} ->
+        Logger.info("Reached agent.max_turns for #{issue_context(refreshed_issue)} with issue still active; returning control to orchestrator")
+
+        if github_tracker?() do
+          {:error, :github_delivery_incomplete}
+        else
+          :ok
+        end
+
+      {:done, _refreshed_issue} ->
+        :ok
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
@@ -171,6 +191,41 @@ defmodule SymphonyElixir.AgentRunner do
   end
 
   defp active_issue_state?(_state_name), do: false
+
+  defp prepare_tracker_workspace(workspace, issue) do
+    if github_tracker?() do
+      Delivery.prepare_workspace(workspace, issue)
+    else
+      {:ok, nil}
+    end
+  end
+
+  defp maybe_deliver_github_issue(workspace, issue, opts) do
+    if github_tracker?() do
+      Delivery.deliver(workspace, issue, run_id: Keyword.get(opts, :run_id))
+    else
+      :continue
+    end
+  end
+
+  defp update_tracker_workpad(issue, metadata) do
+    if github_tracker?() do
+      Tracker.update_workpad(issue, metadata)
+    else
+      :ok
+    end
+  end
+
+  defp github_tracker? do
+    Config.settings!().tracker.kind == "github"
+  end
+
+  defp tracker_metadata(opts, metadata) do
+    case Keyword.get(opts, :run_id) do
+      run_id when is_binary(run_id) -> Map.put(metadata, :run_id, run_id)
+      _ -> metadata
+    end
+  end
 
   defp selected_worker_host(nil, []), do: nil
 
